@@ -1,0 +1,13 @@
+Face-mask-Detection
+
+Data :
+
+Source data from AIZOOTech , which is a great job.
+
+https://drive.google.com/open?id=1KVoipQ-VsmF3FDil2QiZgJD1_Nnf02XW
+
+change the ./config/config.py to point the data directory 
+
+train : python train.py
+test  : python test.py
+infer : python inference.py 
