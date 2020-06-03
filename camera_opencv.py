@@ -1,18 +1,30 @@
-from config import config
-from model.network import slimModel
-from utils.data_utils import dataProcessUtils
-
-
+import os
+import cv2
+from base_camera import BaseCamera
 from tqdm import tqdm
 import logging
 import sys 
 import tensorflow as tf 
-import cv2
 import numpy as np 
 import time
 
+from config import config
+from model.network import slimModel
+from utils.data_utils import dataProcessUtils
+
 logging.basicConfig(stream=sys.stdout, level=logging.INFO,
                     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+
+
+data_process            = dataProcessUtils()
+priors,number_of_cells  = data_process.generate_prior_boxes()
+
+
+logging.info("loading model")
+sModel = slimModel(number_of_cells)
+model  = sModel.build_model()
+model.load_weights("model.h5")
+logging.info("model loading done")
 
 
 def parse_prediction(predictions, priors,data_process):
@@ -78,55 +90,47 @@ def show_image(img, boxes, classes, scores, img_height, img_width, prior_index, 
     cv2.putText(img, '{} {}'.format(class_name, score),
                 (int(boxes[prior_index][0] * img_width), int(boxes[prior_index][1] * img_height) - 4),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255))
+    return img
 
 
-    
+class Camera(BaseCamera):
+    video_source = 0
 
-def main():
+    def __init__(self):
+        if os.environ.get('OPENCV_CAMERA_SOURCE'):
+            Camera.set_video_source(int(os.environ['OPENCV_CAMERA_SOURCE']))
+        super(Camera, self).__init__()
 
-    data_process            = dataProcessUtils()
-    priors,number_of_cells  = data_process.generate_prior_boxes()
+    @staticmethod
+    def set_video_source(source):
+        Camera.video_source = source
 
+    @staticmethod
+    def frames():
+        camera = cv2.VideoCapture(Camera.video_source)
+        camera.set(cv2.CAP_PROP_FRAME_WIDTH, 320)
+        camera.set(cv2.CAP_PROP_FRAME_HEIGHT, 240)
 
-    logging.info("loading model")
-    sModel = slimModel(number_of_cells)
-    model  = sModel.build_model()
-    model.load_weights("model.h5")
-    logging.info("model loading done")
+        if not camera.isOpened():
+            raise RuntimeError('Could not start camera.')
 
-    capture = cv2.VideoCapture(0)
-    capture.set(cv2.CAP_PROP_FRAME_WIDTH, 320)
-    capture.set(cv2.CAP_PROP_FRAME_HEIGHT, 240)
+        while True:
+            # read current frame
+            _, frame = camera.read()
 
-    start = time.time()
-    while True:
+            h,w,_ = frame.shape
+            img = np.float32(frame.copy())
 
-        _,frame = capture.read()
-        if frame is None:
-            logging.error('No camera found')
+            img  = cv2.cvtColor(img,cv2.COLOR_BGR2RGB)
+            
+            img = img / 255.0 - 0.5
 
-        h,w,_ = frame.shape
-        img = np.float32(frame.copy())
-
-        img  = cv2.cvtColor(img,cv2.COLOR_BGR2RGB)
-        
-        img = img / 255.0 - 0.5
-
-        predictions = model(img[np.newaxis, ...])
-        boxes, classes, scores = parse_prediction(predictions, priors, data_process)      
-
-        for prior_index in range(len(classes)):
-            show_image(frame, boxes, classes, scores, h, w, prior_index,config.class_names)
-       
-        fps_str = "FPS: %.2f" % (1 / (time.time() - start))
-        start = time.time()
-        cv2.putText(frame, fps_str, (25, 25),cv2.FONT_HERSHEY_DUPLEX, 0.75, (0, 255, 0), 2)
-
-        cv2.imshow('frame', frame)
-        if cv2.waitKey(1) == ord('q'):
-            exit()
+            predictions = model(img[np.newaxis, ...])
+            boxes, classes, scores = parse_prediction(predictions, priors, data_process)
 
 
+            for prior_index in range(len(classes)):
+                 show_image(frame, boxes, classes, scores, h, w, prior_index,config.class_names)
 
-if __name__ == '__main__':
-    main()
+            # encode as a jpeg image and return it
+            yield cv2.imencode('.jpg', frame)[1].tobytes()
